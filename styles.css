@@ -57,24 +57,14 @@
 
 *{box-sizing:border-box;margin:0}
 html{-webkit-text-size-adjust:100%}
-
-body {
-  font-family: var(--font-b);
-  color: var(--ink);
-
-  background-image:
-    linear-gradient(rgba(248, 245, 240, 0.35), rgba(248, 245, 240, 0.35)),
-    url("fondo.png");
-
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-attachment: fixed;
-
-  min-height: 100vh;
-  font-size: 15px;
-  line-height: 1.5;
-  overflow-x: hidden;
+body{
+  font-family:var(--font-b);
+  color:var(--ink);
+  background:linear-gradient(180deg,var(--bg2) 0,var(--bg) 260px) fixed,var(--bg);
+  min-height:100vh;
+  font-size:15px;
+  line-height:1.5;
+  overflow-x:hidden;
 }
 h1,h2,h3{font-family:var(--font-d);line-height:1.15}
 h1{font-size:clamp(1.45rem,5.5vw,2rem);font-weight:800;color:var(--wine);letter-spacing:-.01em}
@@ -536,4 +526,78 @@ tfoot td{font-weight:800;background:var(--g-soft)}
 
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
+}
+
+
+/* ==========================================================
+   FONDO PERSONALIZADO
+   Para cambiarlo, solo guarda tu imagen con el nombre
+   "fondo.png" en esta misma carpeta (junto a index.html).
+   Para ajustar cómo se ve, cambia los 4 valores de abajo.
+   ========================================================== */
+:root{
+  --fondo-opacidad: .22;          /* 0 = invisible, 1 = imagen completa */
+  --fondo-opacidad-oscuro: .10;   /* opacidad en modo oscuro */
+  --fondo-tamano: cover;          /* cover = llena la pantalla | contain = se ve entera */
+  --fondo-posicion: center;       /* center | top | bottom | left | right */
+}
+body::before{
+  content:"";
+  position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:url("fondo.png") var(--fondo-posicion) / var(--fondo-tamano) no-repeat;
+  opacity:var(--fondo-opacidad);
+}
+[data-theme="dark"] body::before{opacity:var(--fondo-opacidad-oscuro)}
+
+
+/* ==========================================================
+   ELEGIR PRODUCTO (ventana con botones)
+   ========================================================== */
+.field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.field-lbl{font-size:.84rem;font-weight:700;color:var(--muted)}
+.prod-btn{
+  font:inherit;font-size:16px;font-weight:600;cursor:pointer;text-align:left;color:var(--muted);
+  width:100%;min-height:52px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  background:var(--field);border:2px dashed var(--red);border-radius:12px;
+}
+.prod-btn.has{color:var(--ink);border-style:solid;border-color:var(--line);font-weight:700}
+.prod-btn .pb-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prod-btn .pb-arrow{color:var(--red);flex:none}
+.prod-btn:hover{border-color:var(--red)}
+.prod-btn.invalid{border-color:var(--err);background:rgba(201,4,31,.06)}
+.pick-search{margin-bottom:12px;position:sticky;top:0;z-index:2}
+.pick-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (min-width:640px){.pick-grid{grid-template-columns:repeat(3,1fr)}}
+.pick-tile{
+  font:inherit;cursor:pointer;text-align:left;color:var(--ink);
+  min-height:76px;padding:12px;border-radius:14px;border:2px solid var(--line);background:var(--card);
+  display:flex;flex-direction:column;justify-content:center;gap:4px;
+  box-shadow:var(--shadow);transition:transform .08s,border-color .15s;
+}
+.pick-tile b{font-size:.98rem;line-height:1.2;overflow-wrap:anywhere}
+.pick-tile small{color:var(--muted);font-size:.78rem}
+.pick-tile:hover{border-color:var(--red)}
+.pick-tile:active{transform:scale(.97)}
+.pick-tile.on{background:var(--g-hot);color:#fff;border-color:transparent}
+.pick-tile.on small{color:rgba(255,255,255,.9)}
+
+
+/* ==========================================================
+   CLAVE DEL ENCARGADO
+   ========================================================== */
+.pin-input{text-align:center;font-size:1.4rem;font-weight:800;letter-spacing:.35em;min-height:56px}
+.pin-input::placeholder{letter-spacing:.1em;font-size:.95rem;font-weight:500}
+.link-btn{background:none;border:0;color:var(--red);font:inherit;font-weight:700;text-decoration:underline;cursor:pointer;padding:12px 0 0;display:block;margin:0 auto}
+.recovery-code{
+  margin:14px 0 4px;text-align:center;font-family:"Courier New",monospace;font-size:2rem;font-weight:800;
+  letter-spacing:.14em;padding:16px;border:2px dashed var(--red);border-radius:14px;background:var(--g-soft);color:var(--wine);
+  user-select:all;
+}
+[data-theme="dark"] .recovery-code{background:var(--bg2);color:#FFB3BB}
+.nav button.is-locked::after{content:"🔒";position:absolute;top:5px;left:calc(50% + 6px);font-size:.62rem}
+@media (min-width:900px){.nav button.is-locked::after{top:50%;left:auto;right:14px;transform:translateY(-50%);font-size:.8rem}}
+
+/* Separar el botón Limpiar venta */
+#btn-clear {
+  margin-top: 12px;
 }

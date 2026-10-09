@@ -35,7 +35,11 @@ function defaults() {
       sound: true,
       theme: 'light',
       lastBackup: null,
-      goalNotified: ''
+      goalNotified: '',
+      pin: null,            // clave del encargado (se guarda cifrada)
+      configVersion: 0,     // versión de config.js ya aplicada en este equipo
+      lockVoid: true,       // pedir clave para anular ventas
+      lockViews: { historial: false, dashboard: false, reportes: false }
     }
   };
 }
@@ -190,9 +194,247 @@ function alertHTML(type, title, text, big = '', extraHTML = '') {
   return `<div class="alert ${type}" role="alert"><span class="a-ico">${TOAST_ICONS[type]}</span><div class="a-body">${title ? `<span class="a-title">${esc(title)}</span>` : ''}${big ? `<span class="a-big">${big}</span>` : ''}${text ? `<span>${text}</span>` : ''}${extraHTML}</div></div>`;
 }
 
+/* ==========================================================
+   CONFIGURACIÓN OFICIAL (config.js): clave + catálogo para todos los celulares
+   ========================================================== */
+function applyConfig() {
+  const C = window.SOFIA_CONFIG;
+  if (!C || !C.version || S.settings.configVersion === C.version) return;
+  const clone = o => JSON.parse(JSON.stringify(o));
+  if (Array.isArray(C.categories) && C.categories.length) S.categories = clone(C.categories);
+  if (Array.isArray(C.products)) S.products = clone(C.products);
+  if (C.business) S.settings.business = C.business;
+  if (C.settings) ['bigSale', 'dailyGoal', 'maxDiscount'].forEach(k => { if (typeof C.settings[k] === 'number') S.settings[k] = C.settings[k]; });
+  if (C.pin && C.pin.h) S.settings.pin = clone(C.pin);
+  S.settings.configVersion = C.version;
+  save();
+}
+function exportConfig() {
+  if (!S.settings.pin) { toast('warn', 'Primero crea la clave', 'La configuración debe llevar la clave del encargado.'); return; }
+  const version = Date.now(), now = new Date().toISOString();
+  const cfg = {
+    version, business: S.settings.business,
+    settings: { bigSale: S.settings.bigSale, dailyGoal: S.settings.dailyGoal, maxDiscount: S.settings.maxDiscount },
+    pin: S.settings.pin, categories: S.categories, products: S.products
+  };
+  const txt = `/* Configuración oficial de ${S.settings.business}. Generado el ${fdate(now)} ${ftime(now)}.\n   No lo edites a mano: se genera desde Ajustes -> Publicar para las impulsadoras. */\nwindow.SOFIA_CONFIG = ${JSON.stringify(cfg, null, 2)};\n`;
+  S.settings.configVersion = version; save();
+  download(new Blob([txt], { type: 'text/javascript;charset=utf-8' }), 'config.js');
+  toast('success', 'config.js descargado', `${S.categories.length} categorías y ${S.products.length} productos. Súbelo a GitHub reemplazando el anterior.`, 8000);
+}
+
+/* ==========================================================
+   CLAVE DEL ENCARGADO (candado contra cambios accidentales)
+   ========================================================== */
+const UNLOCK_MS = 5 * 60 * 1000;
+const LOCK_KEY = 'sofia_lock_v1';
+const VIEW_NAMES = { historial: 'Historial', dashboard: 'Dashboard', reportes: 'Reportes', catalogo: 'Catálogo', ajustes: 'Ajustes' };
+let unlockedUntil = 0, accessPending = null;
+const isUnlocked = () => Date.now() < unlockedUntil;
+function touchUnlock() { if (isUnlocked()) unlockedUntil = Date.now() + UNLOCK_MS; }
+function lockedViews() {
+  const L = S.settings.lockViews || {};
+  return ['catalogo', 'ajustes'].concat(['historial', 'dashboard', 'reportes'].filter(v => L[v]));
+}
+function hashStr(str) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) { const ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+function hashPin(v, salt) { let h = v + '|' + salt; for (let i = 0; i < 3000; i++) h = hashStr(h + salt); return h; }
+function randomCode(n) {
+  const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; let out = '';
+  try { const b = new Uint8Array(n); crypto.getRandomValues(b); b.forEach(x => { out += A[x % A.length]; }); }
+  catch (e) { for (let i = 0; i < n; i++) out += A[Math.floor(Math.random() * A.length)]; }
+  return out;
+}
+const normCode = x => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const showCode = c => c.slice(0, 4) + '-' + c.slice(4);
+function verifyPin(v) { const p = S.settings.pin; return !!p && hashPin(v, p.salt) === p.h; }
+function verifyRecovery(v) { const p = S.settings.pin; return !!p && hashPin(normCode(v), p.salt) === p.rh; }
+function savePin(pin) {
+  const salt = uid() + uid(), rec = randomCode(8);
+  S.settings.pin = { salt, h: hashPin(pin, salt), rh: hashPin(rec, salt) };
+  save(); return rec;
+}
+/* intentos fallidos: 3 errores seguidos = espera de 30 s, y se duplica */
+function lockState() { try { return JSON.parse(localStorage.getItem(LOCK_KEY)) || { fails: 0, until: 0 }; } catch (e) { return { fails: 0, until: 0 }; } }
+function setLockState(st) { try { localStorage.setItem(LOCK_KEY, JSON.stringify(st)); } catch (e) { } }
+function waitSeconds() { return Math.max(0, Math.ceil((lockState().until - Date.now()) / 1000)); }
+function failAttempt() {
+  const st = lockState(); st.fails = (st.fails || 0) + 1;
+  if (st.fails >= 3) st.until = Date.now() + Math.min(300, 30 * Math.pow(2, st.fails - 3)) * 1000;
+  setLockState(st);
+}
+function resetFails() { setLockState({ fails: 0, until: 0 }); }
+
+function pinProblem(a, b) {
+  if (!/^\d{4,8}$/.test(a)) return 'La clave debe tener entre 4 y 8 números.';
+  if (/^(\d)\1+$/.test(a) || ['1234', '12345', '123456', '4321'].includes(a)) return 'Esa clave es muy fácil de adivinar. Elige otra.';
+  if (a !== b) return 'Las dos claves no coinciden.';
+  return '';
+}
+const pinInput = (id, label) => `<label>${label}<input id="${id}" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="new-password" maxlength="8"></label>`;
+function fieldErr(msg) { const e = $('#pin-err'); if (e) e.innerHTML = msg ? alertHTML('error', '', msg) : ''; beep('error'); vibrate([80, 40, 80]); }
+function enterToSubmit(ov) {
+  $$('input', ov).forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const b = $$('.modal-actions .btn', ov).pop(); if (b) b.click(); } }));
+}
+function grant(once) {
+  if (!once) { unlockedUntil = Date.now() + UNLOCK_MS; toast('success', 'Acceso de encargado', 'Se cierra solo a los 5 minutos o al volver a Vender.'); }
+  updateLockUI();
+}
+function updateLockUI() {
+  const u = isUnlocked(), b = $('#btn-lock');
+  if (b) { b.textContent = u ? '🔓' : '🔒'; b.title = u ? 'Bloquear ahora' : 'Entrar como encargado'; b.setAttribute('aria-label', b.title); }
+  const L = lockedViews();
+  $$('#nav button').forEach(x => x.classList.toggle('is-locked', L.includes(x.dataset.view) && !u));
+}
+function lockNow() {
+  unlockedUntil = 0; updateLockUI();
+  if (lockedViews().includes(currentView)) showNow('vender');
+  toast('info', 'Sistema bloqueado', 'Modo vendedora.');
+}
+function requireAccess(reason, once = false) {
+  if (isUnlocked()) { if (!once) touchUnlock(); return Promise.resolve(true); }
+  if (accessPending) return accessPending;
+  const p = (S.settings.pin ? askPinModal(reason, once) : setupPinFlow()).finally(() => { accessPending = null; });
+  accessPending = p; return p;
+}
+function askPinModal(reason, once) {
+  return new Promise(res => {
+    let handoff = false;
+    modal({
+      title: '🔒 Acceso restringido',
+      body: `${alertHTML('warn', 'Solo el encargado puede entrar aquí', `${esc(reason || 'Esta acción necesita la clave del encargado')}. Si no eres el encargado, <b>contáctalo y solicita la clave</b>.`)}<br>${pinInput('pin-in', 'Clave del encargado')}<div id="pin-err" style="margin-top:8px"></div><button type="button" class="link-btn" id="pin-forgot">Olvidé la clave</button>`,
+      actions: [
+        { label: 'Cancelar', cls: 'ghost', onClick: () => res(false) },
+        {
+          label: 'Entrar', cls: 'primary', onClick: () => {
+            const w = waitSeconds(); if (w > 0) { fieldErr(`Demasiados intentos. Espera ${w} segundos.`); return false; }
+            const v = $('#pin-in').value.trim();
+            if (!v) { fieldErr('Escribe la clave.'); return false; }
+            if (verifyPin(v)) { resetFails(); grant(once); res(true); return; }
+            failAttempt();
+            const w2 = waitSeconds();
+            fieldErr(w2 > 0 ? `Clave incorrecta. Espera ${w2} segundos para volver a intentar.` : 'Clave incorrecta. Intenta de nuevo.');
+            $('#pin-in').value = ''; $('#pin-in').focus(); return false;
+          }
+        }
+      ],
+      onClose: () => { if (!handoff) res(false); },
+      onOpen: (ov, close) => {
+        enterToSubmit(ov); setTimeout(() => $('#pin-in', ov).focus(), 60);
+        $('#pin-forgot', ov).addEventListener('click', () => { handoff = true; close(); recoverFlow().then(res); });
+      }
+    });
+  });
+}
+function showRecoveryCode(code) {
+  modal({
+    title: '🔑 Código de recuperación',
+    body: `${alertHTML('warn', 'Guárdalo ahora', 'Este código se muestra una sola vez. Si olvidas la clave, es la única forma de recuperarla. Anótalo y guárdalo en un lugar seguro, lejos de las impulsadoras.')}<div class="recovery-code">${showCode(code)}</div>`,
+    actions: [
+      { label: '📋 Copiar', cls: 'ghost', onClick: () => { try { navigator.clipboard.writeText(showCode(code)); toast('success', 'Código copiado'); } catch (e) { toast('warn', 'No se pudo copiar', 'Anótalo a mano.'); } return false; } },
+      { label: 'Ya lo guardé', cls: 'primary' }
+    ]
+  });
+}
+function setupPinFlow() {
+  return new Promise(res => {
+    let done = false;
+    modal({
+      title: '🔑 Crear clave del encargado',
+      body: `${alertHTML('info', 'Esta clave protege el sistema', 'Se pedirá para entrar a Catálogo y Ajustes y para anular ventas. Solo debe conocerla el encargado, no las impulsadoras.')}<br>${pinInput('pin-a', 'Nueva clave (4 a 8 números)')}<br>${pinInput('pin-b', 'Repite la clave')}<div id="pin-err" style="margin-top:8px"></div>`,
+      actions: [
+        { label: 'Cancelar', cls: 'ghost', onClick: () => res(false) },
+        {
+          label: 'Guardar clave', cls: 'primary', onClick: () => {
+            const a = $('#pin-a').value.trim(), pr = pinProblem(a, $('#pin-b').value.trim());
+            if (pr) { fieldErr(pr); return false; }
+            const rec = savePin(a); done = true; grant(false); res(true);
+            setTimeout(() => showRecoveryCode(rec), 80);
+          }
+        }
+      ],
+      onClose: () => { if (!done) res(false); },
+      onOpen: ov => { enterToSubmit(ov); setTimeout(() => $('#pin-a', ov).focus(), 60); }
+    });
+  });
+}
+function changePinFlow() {
+  modal({
+    title: '🔑 Cambiar clave',
+    body: `${pinInput('pin-c', 'Clave actual')}<br>${pinInput('pin-a', 'Nueva clave (4 a 8 números)')}<br>${pinInput('pin-b', 'Repite la nueva clave')}<div id="pin-err" style="margin-top:8px"></div>`,
+    actions: [
+      { label: 'Cancelar', cls: 'ghost' },
+      {
+        label: 'Cambiar clave', cls: 'primary', onClick: () => {
+          const w = waitSeconds(); if (w > 0) { fieldErr(`Demasiados intentos. Espera ${w} segundos.`); return false; }
+          if (!verifyPin($('#pin-c').value.trim())) { failAttempt(); fieldErr('La clave actual es incorrecta.'); return false; }
+          resetFails();
+          const a = $('#pin-a').value.trim(), pr = pinProblem(a, $('#pin-b').value.trim());
+          if (pr) { fieldErr(pr); return false; }
+          const rec = savePin(a); toast('success', 'Clave cambiada');
+          setTimeout(() => showRecoveryCode(rec), 80);
+          if (currentView === 'ajustes') renderAjustes();
+        }
+      }
+    ],
+    onOpen: ov => { enterToSubmit(ov); setTimeout(() => $('#pin-c', ov).focus(), 60); }
+  });
+}
+function recoverFlow() {
+  return new Promise(res => {
+    let done = false;
+    modal({
+      title: '🔑 Recuperar acceso',
+      body: `${alertHTML('info', 'Usa tu código de recuperación', 'Es el código de 8 letras y números que se mostró al crear la clave. Sin ese código, la única salida es borrar los datos del navegador (se pierden las ventas que no tengan respaldo).')}<br><label>Código de recuperación<input id="rec-in" class="pin-input" type="text" autocomplete="off" maxlength="9" placeholder="XXXX-XXXX"></label><br>${pinInput('pin-a', 'Nueva clave (4 a 8 números)')}<br>${pinInput('pin-b', 'Repite la nueva clave')}<div id="pin-err" style="margin-top:8px"></div>`,
+      actions: [
+        { label: 'Cancelar', cls: 'ghost', onClick: () => res(false) },
+        {
+          label: 'Recuperar', cls: 'primary', onClick: () => {
+            const w = waitSeconds(); if (w > 0) { fieldErr(`Demasiados intentos. Espera ${w} segundos.`); return false; }
+            if (!verifyRecovery($('#rec-in').value)) { failAttempt(); fieldErr('El código de recuperación no es correcto.'); return false; }
+            const a = $('#pin-a').value.trim(), pr = pinProblem(a, $('#pin-b').value.trim());
+            if (pr) { fieldErr(pr); return false; }
+            resetFails();
+            const rec = savePin(a); done = true; grant(false); res(true);
+            setTimeout(() => showRecoveryCode(rec), 80);
+          }
+        }
+      ],
+      onClose: () => { if (!done) res(false); },
+      onOpen: ov => { enterToSubmit(ov); setTimeout(() => $('#rec-in', ov).focus(), 60); }
+    });
+  });
+}
+function initLock() {
+  $('#btn-lock').addEventListener('click', () => { if (isUnlocked()) lockNow(); else requireAccess('Entrar como encargado'); });
+  const bump = () => { if (isUnlocked() && currentView !== 'vender') touchUnlock(); };
+  document.addEventListener('pointerdown', bump, true);
+  document.addEventListener('keydown', bump, true);
+  setInterval(() => {
+    if (unlockedUntil && !isUnlocked()) {
+      unlockedUntil = 0; updateLockUI();
+      if (lockedViews().includes(currentView)) { toast('info', 'Sesión del encargado cerrada', 'Por seguridad, vuelve a ingresar la clave.'); showNow('vender'); }
+    }
+  }, 10000);
+  updateLockUI();
+}
+
 /* ---------- Navegación ---------- */
 let currentView = 'vender';
-function show(view) {
+async function show(view) {
+  if (lockedViews().includes(view) && !isUnlocked()) {
+    const ok = await requireAccess(`Para entrar a ${VIEW_NAMES[view]} se necesita la clave del encargado`);
+    if (!ok) return;
+  }
+  if (view === 'vender' && isUnlocked()) { unlockedUntil = 0; updateLockUI(); }
+  showNow(view);
+}
+function showNow(view) {
   currentView = view;
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
@@ -217,8 +459,55 @@ function nextId() { return 'V-' + pad(S.counter + 1, 4); }
 function catOptions(sel) {
   return '<option value="">Elige categoría…</option>' + S.categories.map(c => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${esc(c.emoji)} ${esc(c.name)}</option>`).join('');
 }
-function prodOptions(catId) {
-  return S.products.filter(p => p.catId === catId).map(p => `<option value="${esc(p.name)}"></option>`).join('');
+/* ----- Ventana para elegir producto (solo productos del catálogo) ----- */
+function setLineProduct(l, row, p) {
+  l.name = p ? p.name : '';
+  if (p) l.unit = p.unit;
+  const btn = $('.f-name', row);
+  $('.pb-text', btn).textContent = p ? p.name : 'Toca para elegir el producto';
+  btn.classList.toggle('has', !!p);
+  $('.f-unit', row).value = l.unit;
+  $('.u', row).textContent = l.unit;
+}
+function openProductPicker(l, row) {
+  const cat = catById(l.catId);
+  if (!cat) { toast('warn', 'Primero elige la categoría', 'Los productos se muestran según la categoría.'); const c = $('.f-cat', row); c.classList.add('invalid'); c.focus(); return; }
+  const prods = S.products.filter(p => p.catId === cat.id).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  if (!prods.length) {
+    modal({
+      title: `${cat.emoji} ${cat.name}`,
+      body: alertHTML('warn', 'Esta categoría no tiene productos', 'Pide al encargado que agregue los productos en la sección Catálogo.'),
+      actions: [{ label: 'Cerrar', cls: 'ghost' }, { label: 'Soy el encargado', cls: 'primary', onClick: () => { setTimeout(() => show('catalogo'), 30); } }]
+    });
+    return;
+  }
+  const tile = p => {
+    const last = S.prices[priceKey(p.catId, p.name, p.unit)];
+    return `<button type="button" class="pick-tile ${p.name === l.name ? 'on' : ''}" data-pid="${p.id}" data-n="${esc(p.name.toLowerCase())}">
+      <b>${esc(p.name)}</b><small>por ${esc(p.unit)}${last ? ' · último ' + money(last) : ''}</small></button>`;
+  };
+  modal({
+    title: `${cat.emoji} ${cat.name} · elige el producto`, wide: true,
+    body: `${prods.length > 6 ? `<input class="pick-search" type="search" placeholder="Buscar producto…" autocomplete="off" aria-label="Buscar producto">` : ''}
+      <div class="pick-grid">${prods.map(tile).join('')}</div>
+      <div class="pick-none hide">${alertHTML('info', 'Sin resultados', 'Prueba con otra palabra.')}</div>
+      <p class="muted tiny" style="margin-top:10px">${prods.length} producto${prods.length > 1 ? 's' : ''} en ${esc(cat.name)}</p>`,
+    onOpen: (ov, close) => {
+      const grid = $('.pick-grid', ov), none = $('.pick-none', ov), q = $('.pick-search', ov);
+      if (q) q.addEventListener('input', () => {
+        const t = q.value.trim().toLowerCase(); let n = 0;
+        $$('.pick-tile', grid).forEach(b => { const ok = !t || b.dataset.n.includes(t); b.classList.toggle('hide', !ok); if (ok) n++; });
+        none.classList.toggle('hide', n > 0);
+      });
+      grid.addEventListener('click', e => {
+        const b = e.target.closest('.pick-tile'); if (!b) return;
+        const p = S.products.find(x => x.id === b.dataset.pid); if (!p) return;
+        setLineProduct(l, row, p);
+        close(); updateTotals();
+        const pr = $('.f-price', row); if (pr) setTimeout(() => pr.focus(), 80);
+      });
+    }
+  });
 }
 function lineHTML(l, i) {
   const cat = catById(l.catId);
@@ -230,11 +519,12 @@ function lineHTML(l, i) {
     </div>
     <div class="line-grid">
       <label class="w-full">Categoría<select class="f-cat">${catOptions(l.catId)}</select></label>
-      <label class="w-full">Producto<input class="f-name" list="dl-${l.k}" value="${esc(l.name)}" placeholder="Ej: Pechuga de pollo" autocomplete="off" maxlength="60"></label>
-      <datalist id="dl-${l.k}">${prodOptions(l.catId)}</datalist>
+      <div class="field w-full"><span class="field-lbl">Producto</span>
+        <button type="button" class="prod-btn f-name ${l.name ? 'has' : ''}" data-act="pick" aria-haspopup="dialog"><span class="pb-text">${l.name ? esc(l.name) : 'Toca para elegir el producto'}</span><span class="pb-arrow" aria-hidden="true">▾</span></button>
+      </div>
       <label>Cantidad<input class="f-qty" type="number" inputmode="decimal" min="0" step="any" value="${esc(l.qty)}"></label>
       <label>Unidad<select class="f-unit">${UNITS.map(u => `<option ${u === l.unit ? 'selected' : ''}>${u}</option>`).join('')}</select></label>
-      <label class="w-full">Precio de venta (Bs por <span class="u">${esc(l.unit)}</span>)<input class="f-price" type="number" inputmode="decimal" min="0" step="any" value="${esc(l.price)}" placeholder="0.00"></label>
+      <label class="w-full"><span>Precio de venta (Bs por <span class="u">${esc(l.unit)}</span>)</span><input class="f-price" type="number" inputmode="decimal" min="0" step="any" value="${esc(l.price)}" placeholder="0.00"></label>
       <div class="line-sub"><span>Subtotal</span><b class="sub-val">Bs 0,00</b></div>
     </div>
     <div class="line-msgs"></div>
@@ -250,7 +540,7 @@ function renderLines() {
 function lineErrors(l) {
   const e = {};
   if (!l.catId) e.cat = 'Elige una categoría.';
-  if (!l.name.trim()) e.name = 'Escribe el nombre del producto.';
+  if (!l.name.trim()) e.name = 'Elige un producto de la lista.';
   const q = num(l.qty), p = num(l.price);
   if (String(l.qty).trim() === '') e.qty = 'Escribe la cantidad.';
   else if (q <= 0) e.qty = 'La cantidad debe ser mayor a 0.';
@@ -363,11 +653,7 @@ function bindSaleForm() {
   linesEl.addEventListener('input', e => {
     const l = getLine(e); if (!l) return;
     const t = e.target;
-    if (t.classList.contains('f-name')) {
-      l.name = t.value;
-      const p = S.products.find(p => p.catId === l.catId && p.name.toLowerCase() === l.name.trim().toLowerCase());
-      if (p && p.unit !== l.unit) { l.unit = p.unit; $('.f-unit', t.closest('.line')).value = p.unit; }
-    } else if (t.classList.contains('f-qty')) l.qty = t.value;
+    if (t.classList.contains('f-qty')) l.qty = t.value;
     else if (t.classList.contains('f-price')) l.price = t.value;
     updateTotals();
   });
@@ -379,11 +665,13 @@ function bindSaleForm() {
       row.style.setProperty('--cc', catColor(l.catId));
       const cat = catById(l.catId);
       $('.chip-cat', row).textContent = cat ? cat.emoji + ' ' + cat.name : 'Sin categoría';
-      $('datalist', row).innerHTML = prodOptions(l.catId);
+      if (l.name && !S.products.some(p => p.catId === l.catId && p.name === l.name)) setLineProduct(l, row, null);
     } else if (t.classList.contains('f-unit')) l.unit = t.value;
     updateTotals();
   });
   linesEl.addEventListener('click', e => {
+    const pk = e.target.closest('[data-act="pick"]');
+    if (pk) { const l = getLine(e); if (l) openProductPicker(l, pk.closest('.line')); return; }
     const b = e.target.closest('[data-act="rm"]'); if (!b) return;
     const l = getLine(e);
     if (cart.length === 1) { cart = [newLine()]; toast('info', 'Producto limpiado', 'La venta necesita al menos un producto.'); }
@@ -395,7 +683,7 @@ function bindSaleForm() {
     const prev = cart[cart.length - 1];
     const l = newLine(); if (prev && prev.catId) l.catId = prev.catId;
     cart.push(l); renderLines();
-    const el = $(`.line[data-k="${l.k}"] .f-name`); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); }
+    const el = $(`.line[data-k="${l.k}"]`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
   $('#s-disc').addEventListener('input', updateTotals);
   $('#s-disc-type').addEventListener('change', updateTotals);
@@ -458,11 +746,9 @@ function recordSale(c) {
     status: 'ok'
   };
   S.sales.push(sale);
-  // recordar precios y productos
+  // recordar el último precio usado (los productos son fijos del catálogo)
   sale.items.forEach(it => {
     S.prices[priceKey(it.catId, it.name, it.unit)] = it.price;
-    if (!S.products.some(p => p.catId === it.catId && p.name.toLowerCase() === it.name.toLowerCase()))
-      S.products.push({ id: uid(), name: it.name, catId: it.catId, unit: it.unit });
   });
   if (!save()) { S.sales.pop(); S.counter -= 1; return; }
 
@@ -499,7 +785,7 @@ function showReceipt(s) {
     body: ticketHTML(s),
     actions: [
       { label: '📄 Ticket PDF', cls: 'ghost', onClick: () => { ticketPDF(s); return false; } },
-      { label: '➕ Nueva venta', cls: 'primary', onClick: () => { $('#lines .f-name') && $('#lines .f-name').focus(); } }
+      { label: '➕ Nueva venta', cls: 'primary', onClick: () => { window.scrollTo({ top: 0, behavior: 'smooth' }); } }
     ]
   });
 }
@@ -576,6 +862,7 @@ function showSaleDetail(id) {
 }
 async function voidSale(id) {
   const s = S.sales.find(x => x.id === id); if (!s || s.status === 'void') return;
+  if (S.settings.lockVoid !== false && !(await requireAccess('Anular una venta necesita la clave del encargado', true))) return;
   const reason = await promptBox({ title: `Anular ${id}`, message: `Vas a anular una venta de <b>${money(s.total)}</b>. La venta queda registrada como anulada y no cuenta en los totales.`, label: 'Motivo de la anulación', placeholder: 'Ej: Error de precio', okText: 'Anular venta', danger: true });
   if (!reason) return;
   s.status = 'void'; s.voidAt = new Date().toISOString(); s.voidReason = reason;
@@ -592,6 +879,7 @@ async function voidSale(id) {
    ========================================================== */
 function computeAlerts() {
   const A = [], now = new Date(), today = dkey(now), h = now.getHours();
+  if (!S.settings.pin) A.push({ id: 'nopin', type: 'warn', title: 'Falta la clave del encargado', text: 'Créala antes de entregar el sistema a las impulsadoras. Así quedan protegidos el Catálogo, los Ajustes y la anulación de ventas.', act: 'pin', actLabel: 'Crear clave ahora' });
   const tAll = S.sales.filter(s => dkey(s.ts) === today), tOk = tAll.filter(s => s.status !== 'void');
   const tTotal = sum(tOk.map(s => s.total)), goal = S.settings.dailyGoal;
   if (goal > 0) {
@@ -617,12 +905,12 @@ function computeAlerts() {
 }
 const toasted = new Set();
 function checkSystemAlerts() {
-  computeAlerts().filter(a => ['backup', 'caja', 'voids', 'storage', 'idle'].includes(a.id) && !toasted.has(a.id)).forEach((a, i) => {
+  computeAlerts().filter(a => ['nopin', 'backup', 'caja', 'voids', 'storage', 'idle'].includes(a.id) && !toasted.has(a.id)).forEach((a, i) => {
     toasted.add(a.id);
     setTimeout(() => toast(a.type, a.title, a.text, 7000), i * 700);
   });
 }
-function alertAction(act) { if (act === 'backup') exportBackup(); if (act === 'caja') openClosing(); }
+function alertAction(act) { if (act === 'backup') exportBackup(); if (act === 'caja') openClosing(); if (act === 'pin') setupPinFlow().then(() => { if (currentView === 'dashboard') renderDashboard(); }); }
 
 /* ==========================================================
    DASHBOARD
@@ -1018,14 +1306,14 @@ function renderCatalogo() {
   const el = $('#view-catalogo');
   const cnt = id => S.products.filter(p => p.catId === id).length;
   el.innerHTML = `
-    <div class="page-head"><div><h1>Catálogo</h1><p class="muted">Categorías y productos. Los precios se escriben a mano en cada venta.</p></div></div>
+    <div class="page-head"><div><h1>Catálogo</h1><p class="muted">Productos fijos por categoría. El precio se escribe a mano en cada venta.</p></div></div>
     <div class="grid-2">
       <div class="card"><h2>Categorías</h2>
         ${S.categories.map(c => `<div class="list-row" style="border-left:6px solid ${catColor(c.id)}"><span class="emoji">${esc(c.emoji)}</span><div class="lr-main"><b>${esc(c.name)}</b><span class="muted tiny">${cnt(c.id)} productos</span></div><button class="icon-btn" data-ec="${c.id}" aria-label="Editar ${esc(c.name)}">✏️</button><button class="icon-btn danger" data-dc="${c.id}" aria-label="Eliminar ${esc(c.name)}">🗑️</button></div>`).join('') || '<div class="empty">Aún no hay categorías.</div>'}
         <button class="btn primary" id="add-cat" style="width:100%;margin-top:6px">＋ Nueva categoría</button></div>
       <div class="card"><h2>Productos</h2>
         ${S.categories.map(c => { const ps = S.products.filter(p => p.catId === c.id).sort((a, b) => a.name.localeCompare(b.name)); return ps.length ? `<p class="muted" style="margin:8px 0 4px"><b>${esc(c.emoji + ' ' + c.name)}</b></p>` + ps.map(p => `<div class="list-row"><div class="lr-main"><b>${esc(p.name)}</b><span class="muted tiny">Se vende por ${esc(p.unit)}${S.prices[priceKey(p.catId, p.name, p.unit)] ? ' · último precio ' + money(S.prices[priceKey(p.catId, p.name, p.unit)]) : ''}</span></div><button class="icon-btn" data-ep="${p.id}" aria-label="Editar ${esc(p.name)}">✏️</button><button class="icon-btn danger" data-dp2="${p.id}" aria-label="Eliminar ${esc(p.name)}">🗑️</button></div>`).join('') : ''; }).join('') || ''}
-        ${S.products.length ? '' : '<div class="empty">Los productos se guardan solos al venderlos, o agrégalos aquí.</div>'}
+        ${S.products.length ? '' : '<div class="empty">Aún no hay productos. Agrégalos aquí: son los que aparecerán al vender.</div>'}
         <button class="btn primary" id="add-prod" style="width:100%;margin-top:6px">＋ Nuevo producto</button></div>
     </div>`;
   $('#add-cat').addEventListener('click', () => catForm());
@@ -1102,6 +1390,15 @@ function renderAjustes() {
         </div>
         <div class="switch-row"><span>Sonido y vibración en alertas</span><input id="st-sound" type="checkbox" ${st.sound ? 'checked' : ''}></div>
         <button class="btn primary" id="st-save" style="width:100%">Guardar ajustes</button></div>
+      <div class="card"><h2>Seguridad</h2>
+        <p class="muted" style="margin-bottom:10px">Clave del encargado: <b>${st.pin ? 'creada ✔' : 'sin crear'}</b>. Siempre se pide para entrar a Catálogo y Ajustes. Se vuelve a pedir tras 5 minutos sin usar o al volver a Vender.</p>
+        <div class="switch-row"><span>Pedir clave para anular ventas</span><input id="sec-void" type="checkbox" ${st.lockVoid !== false ? 'checked' : ''}></div>
+        <p class="muted tiny" style="margin:8px 0 2px">También pedir clave para entrar a:</p>
+        ${['historial', 'dashboard', 'reportes'].map(v => `<div class="switch-row"><span>${VIEW_NAMES[v]}</span><input type="checkbox" data-lv="${v}" ${(st.lockViews || {})[v] ? 'checked' : ''}></div>`).join('')}
+        <div class="btn-row" style="margin-top:8px"><button class="btn primary" id="sec-pin">🔑 ${st.pin ? 'Cambiar clave' : 'Crear clave'}</button><button class="btn ghost" id="sec-lock">🔒 Bloquear ahora</button></div></div>
+      <div class="card"><h2>Publicar para las impulsadoras</h2>
+        <p class="muted" style="margin-bottom:10px">Los celulares toman de un archivo <b>config.js</b> la clave del encargado, las categorías y los productos. Cuando cambies algo de eso aquí, descarga el archivo y súbelo a GitHub reemplazando el anterior. <b>Estado:</b> ${st.pin ? 'listo para publicar' : 'primero crea la clave'}.</p>
+        <button class="btn primary" id="cfg-export" style="width:100%">⬇ Descargar config.js</button></div>
       <div class="card"><h2>Respaldo de datos</h2>
         <p class="muted" style="margin-bottom:10px">Tus datos viven en este navegador (${kb} KB usados). Haz respaldos seguido y guarda el archivo en un lugar seguro.${st.lastBackup ? `<br>Último respaldo: <b>${fdate(st.lastBackup)} ${ftime(st.lastBackup)}</b>` : '<br><b>Aún no hiciste ningún respaldo.</b>'}</p>
         <div class="btn-row"><button class="btn primary" id="bk-export">💾 Crear respaldo</button><button class="btn ghost" id="bk-import">📂 Importar respaldo</button></div></div>
@@ -1123,6 +1420,11 @@ function renderAjustes() {
   $('#bk-import').addEventListener('click', () => $('#file-import').click());
   $('#bk-sample').addEventListener('click', loadSample);
   $('#bk-reset').addEventListener('click', resetAll);
+  $('#sec-void').addEventListener('change', e => { S.settings.lockVoid = e.target.checked; if (save()) toast('success', 'Guardado', e.target.checked ? 'Anular ventas pedirá clave.' : 'Anular ventas ya no pedirá clave.'); });
+  $$('[data-lv]', el).forEach(c => c.addEventListener('change', () => { S.settings.lockViews = Object.assign({ historial: false, dashboard: false, reportes: false }, S.settings.lockViews, { [c.dataset.lv]: c.checked }); if (save()) { updateLockUI(); toast('success', 'Guardado', `${VIEW_NAMES[c.dataset.lv]} ${c.checked ? 'pedirá clave' : 'ya no pedirá clave'}.`); } }));
+  $('#sec-pin').addEventListener('click', () => { if (S.settings.pin) changePinFlow(); else setupPinFlow().then(() => renderAjustes()); });
+  $('#sec-lock').addEventListener('click', lockNow);
+  $('#cfg-export').addEventListener('click', exportConfig);
 }
 function exportBackup() {
   S.settings.lastBackup = new Date().toISOString(); save();
@@ -1137,7 +1439,7 @@ function importBackup(file) {
       const d = JSON.parse(fr.result);
       if (!d || !Array.isArray(d.categories) || !Array.isArray(d.sales)) throw new Error('El archivo no parece un respaldo de este sistema.');
       if (!await confirmBox({ title: 'Importar respaldo', message: `El respaldo tiene <b>${d.sales.length} ventas</b> y <b>${d.categories.length} categorías</b>. Esto <b>reemplaza todos los datos actuales</b>.`, okText: 'Reemplazar datos', danger: true })) return;
-      const base = defaults(); S = Object.assign(base, d, { settings: Object.assign(base.settings, d.settings || {}) });
+      const base = defaults(), keepPin = S.settings.pin; S = Object.assign(base, d, { settings: Object.assign(base.settings, d.settings || {}) }); if (keepPin) S.settings.pin = keepPin;
       if (save()) { applyBrand(); applyTheme(); toast('success', 'Respaldo importado', `${S.sales.length} ventas recuperadas.`); cart = []; show('ajustes'); }
     } catch (e) { toast('error', 'No se pudo importar', e.message || 'Archivo dañado.'); beep('error'); }
   };
@@ -1146,7 +1448,7 @@ function importBackup(file) {
 async function resetAll() {
   const v = await promptBox({ title: 'Borrar todos los datos', message: 'Se borrará <b>todo</b> y no se puede deshacer. Para confirmar escribe <b>BORRAR</b>.', label: 'Escribe BORRAR', okText: 'Borrar todo', danger: true, validate: t => t === 'BORRAR' ? '' : 'Debes escribir BORRAR en mayúsculas.' });
   if (v !== 'BORRAR') return;
-  S = defaults(); save(); cart = []; applyBrand(); applyTheme();
+  const keepPin = S.settings.pin; S = defaults(); S.settings.pin = keepPin; save(); cart = []; applyBrand(); applyTheme();
   toast('success', 'Datos borrados', 'El sistema quedó como nuevo.'); show('ajustes');
 }
 async function loadSample() {
@@ -1202,7 +1504,7 @@ function tickClock() {
   const sc = $('#sale-clock'); if (sc) sc.textContent = fdate(iso) + ' ' + ftime(iso);
 }
 function boot() {
-  applyTheme(); applyBrand(); bindSaleForm();
+  applyConfig(); applyTheme(); applyBrand(); bindSaleForm(); initLock();
   $$('#nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.view)));
   $('#btn-theme').addEventListener('click', () => { S.settings.theme = S.settings.theme === 'dark' ? 'light' : 'dark'; save(); applyTheme(); });
   $('#file-import').addEventListener('change', e => { if (e.target.files[0]) importBackup(e.target.files[0]); e.target.value = ''; });
