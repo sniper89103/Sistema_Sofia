@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#86091A">
+<title>Sofía · Sistema de ventas</title>
+<link rel="icon" href="logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ENCABEZADO -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo-pill"><img class="brand-logo" src="logo.png" alt="Sofía"></span>
+      <div class="brand-text">
+        <strong id="brand-name">Sofía</strong>
+        <small>Sistema de ventas</small>
+      </div>
+    </div>
+    <div class="top-right">
+      <div class="clock" aria-live="off">
+        <b id="clock-time">--:--:--</b>
+        <small id="clock-date">--</small>
+      </div>
+      <button class="icon-btn light" id="btn-theme" aria-label="Cambiar entre modo claro y oscuro" title="Modo claro / oscuro">🌙</button>
+    </div>
+  </header>
+
+  <!-- NAVEGACIÓN -->
+  <nav class="nav" id="nav" aria-label="Secciones">
+    <div class="side-brand">
+      <span class="logo-pill big"><img src="logo.png" alt="Sofía"></span>
+      <small>En Sofía, siempre.</small>
+    </div>
+    <button data-view="vender" class="active"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2.5 3.5h3l2.3 11.2a1.6 1.6 0 0 0 1.6 1.3h8.1a1.6 1.6 0 0 0 1.6-1.2L21 7.5H6.2"/></svg><span class="lbl">Vender</span></button>
+    <button data-view="historial"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.4 2"/></svg><span class="lbl">Historial</span></button>
+    <button data-view="dashboard"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V11M10 20V4M16 20v-7M21 20H3"/></svg><span class="lbl">Dashboard</span></button>
+    <button data-view="reportes"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 20h16"/></svg><span class="lbl">Reportes</span></button>
+    <button data-view="catalogo"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5 20.5 7v10L12 21.5 3.5 17V7z"/><path d="M3.5 7 12 11.5 20.5 7M12 11.5v10"/></svg><span class="lbl">Catálogo</span></button>
+    <button data-view="ajustes"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span class="lbl">Ajustes</span></button>
+  </nav>
+
+  <main class="main">
+
+    <!-- ========== VENDER ========== -->
+    <section id="view-vender" class="view active">
+      <div class="page-head">
+        <div>
+          <h1>Nueva venta</h1>
+          <p class="muted">La fecha y la hora se guardan solas al registrar. Ahora: <b id="sale-clock">--</b></p>
+        </div>
+        <div class="next-id">Próxima venta <b id="next-id">V-0001</b></div>
+      </div>
+
+      <div class="sale-grid">
+        <div class="sale-left">
+          <div class="card">
+            <h2>Cliente</h2>
+            <div class="row2">
+              <label>Nombre (opcional)
+                <input id="s-client" type="text" placeholder="Ej: Doña Marta" autocomplete="off" maxlength="60">
+              </label>
+              <label>Nota (opcional)
+                <input id="s-notes" type="text" placeholder="Ej: Entrega a domicilio" autocomplete="off" maxlength="120">
+              </label>
+            </div>
+          </div>
+
+          <div id="lines"></div>
+
+          <button class="btn add" id="btn-add-line" type="button">＋ Agregar otro producto</button>
+        </div>
+
+        <aside class="sale-right" id="checkout">
+          <div class="card summary">
+            <h2>Resumen de la venta</h2>
+
+            <div class="sum-row"><span>Productos</span><b id="sum-count">0</b></div>
+            <div id="sum-cats" class="sum-cats"></div>
+            <div class="sum-row"><span>Subtotal</span><b id="sum-sub">Bs 0,00</b></div>
+
+            <div class="disc-box">
+              <label>Descuento (opcional)
+                <div class="disc-input">
+                  <select id="s-disc-type" aria-label="Tipo de descuento">
+                    <option value="bs">Bs</option>
+                    <option value="pct">%</option>
+                  </select>
+                  <input id="s-disc" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
+                </div>
+              </label>
+            </div>
+            <div class="sum-row"><span>Descuento</span><b id="sum-disc">− Bs 0,00</b></div>
+
+            <div class="sum-total"><span>TOTAL</span><b id="sum-total">Bs 0,00</b></div>
+            <div id="sale-alerts"></div>
+
+            <button class="btn primary big" id="btn-confirm" type="button">Registrar venta</button>
+            <button class="btn ghost" id="btn-clear" type="button">Limpiar venta</button>
+          </div>
+        </aside>
+      </div>
+
+      <div class="mobile-total" id="mobile-total">
+        <div><small>Total</small><b id="mt-total">Bs 0,00</b></div>
+        <button class="btn primary" id="mt-go" type="button">Registrar ↓</button>
+      </div>
+    </section>
+
+    <!-- ========== HISTORIAL ========== -->
+    <section id="view-historial" class="view"></section>
+
+    <!-- ========== DASHBOARD ========== -->
+    <section id="view-dashboard" class="view"></section>
+
+    <!-- ========== REPORTES ========== -->
+    <section id="view-reportes" class="view"></section>
+
+    <!-- ========== CATÁLOGO ========== -->
+    <section id="view-catalogo" class="view"></section>
+
+    <!-- ========== AJUSTES ========== -->
+    <section id="view-ajustes" class="view"></section>
+
+  </main>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
+<div id="modal-root"></div>
+<input type="file" id="file-import" accept=".json,application/json" hidden>
+
+<!-- Librerías para exportar (se cargan de internet) -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script defer src="app.js"></script>
+</body>
+</html>
