@@ -36,6 +36,7 @@ function defaults() {
       lastBackup: null,
       goalNotified: '',
       pin: null,            // clave del encargado (se guarda cifrada)
+      catalogoVersion: 0,   // versión de catalogo.js ya cargada en este equipo
       configVersion: 0,     // versión de config.js ya aplicada en este equipo
       lockVoid: true,       // pedir clave para anular ventas
       lockViews: { historial: false, reportes: false }
@@ -194,14 +195,45 @@ function alertHTML(type, title, text, big = '', extraHTML = '') {
 }
 
 /* ==========================================================
+   CATÁLOGO INICIAL (catalogo.js): los SKU de Sofía
+   ========================================================== */
+function seedCatalogo() {
+  const K = window.SOFIA_CATALOGO;
+  if (!K || !Array.isArray(K.products) || !K.products.length) return 0;
+  const norm = t => String(t).trim().toLowerCase();
+  const catId = name => {
+    let c = S.categories.find(x => norm(x.name) === norm(name));
+    if (!c) {
+      const def = (K.categories || []).find(x => norm(x.name) === norm(name));
+      c = { id: 'c-' + norm(name).replace(/[^a-z0-9]+/g, ''), name, emoji: (def && def.emoji) || '🛒' };
+      S.categories.push(c);
+    }
+    return c.id;
+  };
+  S.settings.catalogoVersion = K.version;
+  S.products = K.products.map((p, i) => ({ id: 'p' + String(i + 1).padStart(3, '0'), name: p.n, catId: catId(p.c), unit: UNITS.includes(p.u) ? p.u : 'unidad' }));
+  save();
+  return S.products.length;
+}
+function applyCatalogo() {
+  const K = window.SOFIA_CATALOGO;
+  if (!K || !Array.isArray(K.products) || !K.products.length) return;
+  if (S.products.length && S.settings.catalogoVersion === K.version) return;   // ya está al día
+  seedCatalogo();
+}
+const hasCatalogoFile = () => !!(window.SOFIA_CATALOGO && Array.isArray(window.SOFIA_CATALOGO.products) && window.SOFIA_CATALOGO.products.length);
+
+/* ==========================================================
    CONFIGURACIÓN OFICIAL (config.js): clave + catálogo para todos los celulares
    ========================================================== */
 function applyConfig() {
   const C = window.SOFIA_CONFIG;
   if (!C || !C.version || S.settings.configVersion === C.version) return;
   const clone = o => JSON.parse(JSON.stringify(o));
-  if (Array.isArray(C.categories) && C.categories.length) S.categories = clone(C.categories);
-  if (Array.isArray(C.products)) S.products = clone(C.products);
+  if (!hasCatalogoFile()) {   // si existe catalogo.js, él manda sobre productos y categorías
+    if (Array.isArray(C.categories) && C.categories.length) S.categories = clone(C.categories);
+    if (Array.isArray(C.products)) S.products = clone(C.products);
+  }
   if (C.business) S.settings.business = C.business;
   if (C.settings) ['bigSale', 'dailyGoal'].forEach(k => { if (typeof C.settings[k] === 'number') S.settings[k] = C.settings[k]; });
   if (C.pin && C.pin.h) S.settings.pin = clone(C.pin);
@@ -214,12 +246,13 @@ function exportConfig() {
   const cfg = {
     version, business: S.settings.business,
     settings: { bigSale: S.settings.bigSale, dailyGoal: S.settings.dailyGoal },
-    pin: S.settings.pin, categories: S.categories, products: S.products
+    pin: S.settings.pin
   };
+  if (!hasCatalogoFile()) { cfg.categories = S.categories; cfg.products = S.products; }
   const txt = `/* Configuración oficial de ${S.settings.business}. Generado el ${fdate(now)} ${ftime(now)}.\n   No lo edites a mano: se genera desde Ajustes -> Publicar para las impulsadoras. */\nwindow.SOFIA_CONFIG = ${JSON.stringify(cfg, null, 2)};\n`;
   S.settings.configVersion = version; save();
   download(new Blob([txt], { type: 'text/javascript;charset=utf-8' }), 'config.js');
-  toast('success', 'config.js descargado', `${S.categories.length} categorías y ${S.products.length} productos. Súbelo a GitHub reemplazando el anterior.`, 8000);
+  toast('success', 'config.js descargado', 'Súbelo a GitHub reemplazando el anterior.', 8000);
 }
 
 /* ==========================================================
@@ -1192,8 +1225,10 @@ function closingPDF(day) {
 /* ==========================================================
    CATÁLOGO
    ========================================================== */
+let CF = { cat: '', q: '' };
 function renderCatalogo() {
   const el = $('#view-catalogo');
+  if (CF.cat && !catById(CF.cat)) CF.cat = '';
   const cnt = id => S.products.filter(p => p.catId === id).length;
   el.innerHTML = `
     <div class="page-head"><div><h1>Catálogo</h1><p class="muted">Productos fijos por categoría. El precio se escribe a mano en cada venta.</p></div><button class="btn ghost" id="go-ajustes">⚙ Ajustes del encargado</button></div>
@@ -1201,9 +1236,13 @@ function renderCatalogo() {
       <div class="card"><h2>Categorías</h2>
         ${S.categories.map(c => `<div class="list-row" style="border-left:6px solid ${catColor(c.id)}"><span class="emoji">${esc(c.emoji)}</span><div class="lr-main"><b>${esc(c.name)}</b><span class="muted tiny">${cnt(c.id)} productos</span></div><button class="icon-btn" data-ec="${c.id}" aria-label="Editar ${esc(c.name)}">✏️</button><button class="icon-btn danger" data-dc="${c.id}" aria-label="Eliminar ${esc(c.name)}">🗑️</button></div>`).join('') || '<div class="empty">Aún no hay categorías.</div>'}
         <button class="btn primary" id="add-cat" style="width:100%;margin-top:6px">＋ Nueva categoría</button></div>
-      <div class="card"><h2>Productos</h2>
-        ${S.categories.map(c => { const ps = S.products.filter(p => p.catId === c.id).sort((a, b) => a.name.localeCompare(b.name)); return ps.length ? `<p class="muted" style="margin:8px 0 4px"><b>${esc(c.emoji + ' ' + c.name)}</b></p>` + ps.map(p => `<div class="list-row"><div class="lr-main"><b>${esc(p.name)}</b><span class="muted tiny">Se vende por ${esc(p.unit)}${S.prices[priceKey(p.catId, p.name, p.unit)] ? ' · último precio ' + money(S.prices[priceKey(p.catId, p.name, p.unit)]) : ''}</span></div><button class="icon-btn" data-ep="${p.id}" aria-label="Editar ${esc(p.name)}">✏️</button><button class="icon-btn danger" data-dp2="${p.id}" aria-label="Eliminar ${esc(p.name)}">🗑️</button></div>`).join('') : ''; }).join('') || ''}
-        ${S.products.length ? '' : '<div class="empty">Aún no hay productos. Agrégalos aquí: son los que aparecerán al vender.</div>'}
+      <div class="card"><h2>Productos <span class="muted tiny">(${S.products.length})</span></h2>
+        <input id="cp-q" type="search" placeholder="Buscar producto…" value="${esc(CF.q)}" autocomplete="off" style="margin-bottom:10px">
+        <div class="seg wrap" id="cp-chips">
+          <button data-cc="">Todas (${S.products.length})</button>
+          ${S.categories.map(c => `<button data-cc="${c.id}">${esc(c.emoji + ' ' + c.name)} (${cnt(c.id)})</button>`).join('')}
+        </div>
+        <div id="cp-list"></div>
         <button class="btn primary" id="add-prod" style="width:100%;margin-top:6px">＋ Nuevo producto</button></div>
     </div>`;
   $('#go-ajustes').addEventListener('click', () => show('ajustes'));
@@ -1211,8 +1250,25 @@ function renderCatalogo() {
   $('#add-prod').addEventListener('click', () => prodForm());
   $$('[data-ec]', el).forEach(b => b.addEventListener('click', () => catForm(b.dataset.ec)));
   $$('[data-dc]', el).forEach(b => b.addEventListener('click', () => deleteCat(b.dataset.dc)));
-  $$('[data-ep]', el).forEach(b => b.addEventListener('click', () => prodForm(b.dataset.ep)));
-  $$('[data-dp2]', el).forEach(b => b.addEventListener('click', () => deleteProd(b.dataset.dp2)));
+  const upd = () => { $$('#cp-chips button', el).forEach(b => b.classList.toggle('on', b.dataset.cc === CF.cat)); renderProdList(); };
+  $$('#cp-chips button', el).forEach(b => b.addEventListener('click', () => { CF.cat = b.dataset.cc; upd(); }));
+  $('#cp-q').addEventListener('input', e => { CF.q = e.target.value; renderProdList(); });
+  upd();
+}
+function renderProdList() {
+  const box = $('#cp-list'); if (!box) return;
+  const q = CF.q.trim().toLowerCase();
+  const row = p => `<div class="list-row"><div class="lr-main"><b>${esc(p.name)}</b><span class="muted tiny">Se vende por ${esc(p.unit)}${S.prices[priceKey(p.catId, p.name, p.unit)] ? ' · último precio ' + money(S.prices[priceKey(p.catId, p.name, p.unit)]) : ''}</span></div><button class="icon-btn" data-ep="${p.id}" aria-label="Editar ${esc(p.name)}">✏️</button><button class="icon-btn danger" data-dp2="${p.id}" aria-label="Eliminar ${esc(p.name)}">🗑️</button></div>`;
+  const list = S.products.filter(p => (!CF.cat || p.catId === CF.cat) && (!q || p.name.toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  let html = '';
+  if (!S.products.length) html = '<div class="empty">Aún no hay productos. Agrégalos aquí: son los que aparecerán al vender.</div>';
+  else if (!list.length) html = '<div class="empty">No hay productos con ese filtro.</div>';
+  else if (CF.cat) html = list.map(row).join('');
+  else html = S.categories.map(c => { const ps = list.filter(p => p.catId === c.id); return ps.length ? `<p class="muted" style="margin:10px 0 4px"><b>${esc(c.emoji + ' ' + c.name)}</b> · ${ps.length}</p>` + ps.map(row).join('') : ''; }).join('');
+  html = `<p class="muted tiny" style="margin-bottom:6px">${list.length} producto${list.length === 1 ? '' : 's'}${CF.cat ? ' en ' + esc((catById(CF.cat) || {}).name || '') : ''}</p>` + html;
+  box.innerHTML = html;
+  $$('[data-ep]', box).forEach(b => b.addEventListener('click', () => prodForm(b.dataset.ep)));
+  $$('[data-dp2]', box).forEach(b => b.addEventListener('click', () => deleteProd(b.dataset.dp2)));
 }
 function catForm(id) {
   const c = id ? catById(id) : { name: '', emoji: '🥩' };
@@ -1289,6 +1345,9 @@ function renderAjustes() {
       <div class="card"><h2>Publicar para las impulsadoras</h2>
         <p class="muted" style="margin-bottom:10px">Los celulares toman de un archivo <b>config.js</b> la clave del encargado, las categorías y los productos. Cuando cambies algo de eso aquí, descarga el archivo y súbelo a GitHub reemplazando el anterior. <b>Estado:</b> ${st.pin ? 'listo para publicar' : 'primero crea la clave'}.</p>
         <button class="btn primary" id="cfg-export" style="width:100%">⬇ Descargar config.js</button></div>
+      <div class="card"><h2>Catálogo inicial</h2>
+        <p class="muted" style="margin-bottom:10px">Productos (SKU) del archivo <b>catalogo.js</b>: ${((window.SOFIA_CATALOGO || {}).products || []).length} disponibles. Al cargarlos se <b>reemplazan los productos actuales</b>; las ventas ya hechas no cambian.</p>
+        <button class="btn ghost" id="cat-load" ${((window.SOFIA_CATALOGO || {}).products || []).length ? '' : 'disabled'}>📦 Cargar productos de catalogo.js</button></div>
       <div class="card"><h2>Respaldo de datos</h2>
         <p class="muted" style="margin-bottom:10px">Tus datos viven en este navegador (${kb} KB usados). Haz respaldos seguido y guarda el archivo en un lugar seguro.${st.lastBackup ? `<br>Último respaldo: <b>${fdate(st.lastBackup)} ${ftime(st.lastBackup)}</b>` : '<br><b>Aún no hiciste ningún respaldo.</b>'}</p>
         <div class="btn-row"><button class="btn primary" id="bk-export">💾 Crear respaldo</button><button class="btn ghost" id="bk-import">📂 Importar respaldo</button></div></div>
@@ -1316,6 +1375,10 @@ function renderAjustes() {
   $('#sec-pin').addEventListener('click', () => { if (S.settings.pin) changePinFlow(); else setupPinFlow().then(() => renderAjustes()); });
   $('#sec-lock').addEventListener('click', lockNow);
   $('#cfg-export').addEventListener('click', exportConfig);
+  $('#cat-load').addEventListener('click', async () => {
+    if (S.products.length && !await confirmBox({ title: 'Cargar catálogo inicial', message: `Se reemplazarán los <b>${S.products.length} productos</b> actuales por los de catalogo.js.`, okText: 'Reemplazar', danger: true })) return;
+    const n = seedCatalogo(); if (n) toast('success', 'Catálogo cargado', `${n} productos listos para vender.`);
+  });
 }
 function exportBackup() {
   S.settings.lastBackup = new Date().toISOString(); save();
@@ -1396,6 +1459,7 @@ function tickClock() {
 }
 function boot() {
   applyConfig();
+  applyCatalogo();
   { let fx = false; S.products.forEach(p => { if (!UNITS.includes(p.unit)) { p.unit = 'unidad'; fx = true; } }); if (fx) save(); }
   applyTheme(); applyBrand(); bindSaleForm(); initLock();
   $$('#nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.view)));

@@ -575,7 +575,7 @@ body::before{
   display:flex;flex-direction:column;justify-content:center;gap:4px;
   box-shadow:var(--shadow);transition:transform .08s,border-color .15s;
 }
-.pick-tile b{font-size:.98rem;line-height:1.2;overflow-wrap:anywhere}
+.pick-tile b{font-size:.86rem;line-height:1.25;overflow-wrap:break-word}
 .pick-tile small{color:var(--muted);font-size:.78rem}
 .pick-tile:hover{border-color:var(--red)}
 .pick-tile:active{transform:scale(.97)}
@@ -598,6 +598,10 @@ body::before{
 .nav button.is-locked::after{content:"🔒";position:absolute;top:5px;left:calc(50% + 6px);font-size:.62rem}
 @media (min-width:900px){.nav button.is-locked::after{top:50%;left:auto;right:14px;transform:translateY(-50%);font-size:.8rem}}
 
+.seg.wrap{flex-wrap:wrap;overflow:visible}
+.seg.wrap button{min-height:36px;padding:4px 12px;font-size:.85rem}
+
+/* Separación del botón Limpiar venta */
 #btn-clear {
-    margin-top: 10px;
+    margin-top: 20px;
 }
