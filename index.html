@@ -42,10 +42,8 @@
     </div>
     <button data-view="vender" class="active"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2.5 3.5h3l2.3 11.2a1.6 1.6 0 0 0 1.6 1.3h8.1a1.6 1.6 0 0 0 1.6-1.2L21 7.5H6.2"/></svg><span class="lbl">Vender</span></button>
     <button data-view="historial"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.4 2"/></svg><span class="lbl">Historial</span></button>
-    <button data-view="dashboard"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V11M10 20V4M16 20v-7M21 20H3"/></svg><span class="lbl">Dashboard</span></button>
     <button data-view="reportes"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 20h16"/></svg><span class="lbl">Reportes</span></button>
     <button data-view="catalogo"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5 20.5 7v10L12 21.5 3.5 17V7z"/><path d="M3.5 7 12 11.5 20.5 7M12 11.5v10"/></svg><span class="lbl">Catálogo</span></button>
-    <button data-view="ajustes"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span class="lbl">Ajustes</span></button>
   </nav>
 
   <main class="main">
@@ -85,20 +83,6 @@
 
             <div class="sum-row"><span>Productos</span><b id="sum-count">0</b></div>
             <div id="sum-cats" class="sum-cats"></div>
-            <div class="sum-row"><span>Subtotal</span><b id="sum-sub">Bs 0,00</b></div>
-
-            <div class="disc-box">
-              <label>Descuento (opcional)
-                <div class="disc-input">
-                  <select id="s-disc-type" aria-label="Tipo de descuento">
-                    <option value="bs">Bs</option>
-                    <option value="pct">%</option>
-                  </select>
-                  <input id="s-disc" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
-                </div>
-              </label>
-            </div>
-            <div class="sum-row"><span>Descuento</span><b id="sum-disc">− Bs 0,00</b></div>
 
             <div class="sum-total"><span>TOTAL</span><b id="sum-total">Bs 0,00</b></div>
             <div id="sale-alerts"></div>
@@ -118,9 +102,7 @@
     <!-- ========== HISTORIAL ========== -->
     <section id="view-historial" class="view"></section>
 
-    <!-- ========== DASHBOARD ========== -->
-    <section id="view-dashboard" class="view"></section>
-
+    
     <!-- ========== REPORTES ========== -->
     <section id="view-reportes" class="view"></section>
 

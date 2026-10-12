@@ -6,7 +6,7 @@
 
 /* ---------- Constantes y estado ---------- */
 const KEY = 'sofia_ventas_v1';
-const UNITS = ['kg', 'lb', 'unidad', 'paquete'];
+const UNITS = ['kg', 'unidad'];
 const PALETTE = ['#A3142B', '#E8743B', '#F2B705', '#C9041F', '#5E0A15', '#C98A8F', '#2F6FB5', '#4E8F4A'];
 const DEFAULT_CATS = [
   { id: 'c1', name: 'Res', emoji: '🥩' },
@@ -31,7 +31,6 @@ function defaults() {
       business: 'Sofía',
       bigSale: 1000,
       dailyGoal: 1500,
-      maxDiscount: 20,
       sound: true,
       theme: 'light',
       lastBackup: null,
@@ -39,7 +38,7 @@ function defaults() {
       pin: null,            // clave del encargado (se guarda cifrada)
       configVersion: 0,     // versión de config.js ya aplicada en este equipo
       lockVoid: true,       // pedir clave para anular ventas
-      lockViews: { historial: false, dashboard: false, reportes: false }
+      lockViews: { historial: false, reportes: false }
     }
   };
 }
@@ -204,7 +203,7 @@ function applyConfig() {
   if (Array.isArray(C.categories) && C.categories.length) S.categories = clone(C.categories);
   if (Array.isArray(C.products)) S.products = clone(C.products);
   if (C.business) S.settings.business = C.business;
-  if (C.settings) ['bigSale', 'dailyGoal', 'maxDiscount'].forEach(k => { if (typeof C.settings[k] === 'number') S.settings[k] = C.settings[k]; });
+  if (C.settings) ['bigSale', 'dailyGoal'].forEach(k => { if (typeof C.settings[k] === 'number') S.settings[k] = C.settings[k]; });
   if (C.pin && C.pin.h) S.settings.pin = clone(C.pin);
   S.settings.configVersion = C.version;
   save();
@@ -214,7 +213,7 @@ function exportConfig() {
   const version = Date.now(), now = new Date().toISOString();
   const cfg = {
     version, business: S.settings.business,
-    settings: { bigSale: S.settings.bigSale, dailyGoal: S.settings.dailyGoal, maxDiscount: S.settings.maxDiscount },
+    settings: { bigSale: S.settings.bigSale, dailyGoal: S.settings.dailyGoal },
     pin: S.settings.pin, categories: S.categories, products: S.products
   };
   const txt = `/* Configuración oficial de ${S.settings.business}. Generado el ${fdate(now)} ${ftime(now)}.\n   No lo edites a mano: se genera desde Ajustes -> Publicar para las impulsadoras. */\nwindow.SOFIA_CONFIG = ${JSON.stringify(cfg, null, 2)};\n`;
@@ -228,13 +227,13 @@ function exportConfig() {
    ========================================================== */
 const UNLOCK_MS = 5 * 60 * 1000;
 const LOCK_KEY = 'sofia_lock_v1';
-const VIEW_NAMES = { historial: 'Historial', dashboard: 'Dashboard', reportes: 'Reportes', catalogo: 'Catálogo', ajustes: 'Ajustes' };
+const VIEW_NAMES = { historial: 'Historial', reportes: 'Reportes', catalogo: 'Catálogo', ajustes: 'Ajustes' };
 let unlockedUntil = 0, accessPending = null;
 const isUnlocked = () => Date.now() < unlockedUntil;
 function touchUnlock() { if (isUnlocked()) unlockedUntil = Date.now() + UNLOCK_MS; }
 function lockedViews() {
   const L = S.settings.lockViews || {};
-  return ['catalogo', 'ajustes'].concat(['historial', 'dashboard', 'reportes'].filter(v => L[v]));
+  return ['catalogo', 'ajustes'].concat(['historial', 'reportes'].filter(v => L[v]));
 }
 function hashStr(str) {
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
@@ -411,7 +410,7 @@ function recoverFlow() {
   });
 }
 function initLock() {
-  $('#btn-lock').addEventListener('click', () => { if (isUnlocked()) lockNow(); else requireAccess('Entrar como encargado'); });
+  $('#btn-lock').addEventListener('click', () => { if (isUnlocked()) lockNow(); else requireAccess('Entrar como encargado').then(ok => { if (ok) show('catalogo'); }); });
   const bump = () => { if (isUnlocked() && currentView !== 'vender') touchUnlock(); };
   document.addEventListener('pointerdown', bump, true);
   document.addEventListener('keydown', bump, true);
@@ -440,7 +439,7 @@ function showNow(view) {
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   document.body.classList.toggle('in-sale', view === 'vender');
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
-  const fn = { vender: refreshSaleForm, historial: renderHistorial, dashboard: renderDashboard, reportes: renderReportes, catalogo: renderCatalogo, ajustes: renderAjustes }[view];
+  const fn = { vender: refreshSaleForm, historial: renderHistorial, reportes: renderReportes, catalogo: renderCatalogo, ajustes: renderAjustes }[view];
   if (fn) fn();
 }
 
@@ -558,7 +557,7 @@ function lineWarnings(l) {
       else if (!String(l.price).trim()) w.push({ type: 'info', text: `Último precio usado: <b>${money(last)}</b> por ${esc(l.unit)}.` });
     }
   }
-  if (q > 0 && (l.unit === 'kg' || l.unit === 'lb') && q > 100) w.push({ type: 'warn', text: `<b>Cantidad muy alta:</b> ${qtyFmt(q)} ${esc(l.unit)}. Verifica que sea correcta.` });
+  if (q > 0 && l.unit === 'kg' && q > 100) w.push({ type: 'warn', text: `<b>Cantidad muy alta:</b> ${qtyFmt(q)} ${esc(l.unit)}. Verifica que sea correcta.` });
   if (q > 0 && l.unit === 'unidad' && q % 1 !== 0) w.push({ type: 'info', text: 'Las unidades suelen ser números enteros.' });
   return w;
 }
@@ -596,19 +595,10 @@ function calc() {
     if (l.sub > 0) byCat[l.catId || 'x'] = round2((byCat[l.catId || 'x'] || 0) + l.sub);
   });
   subtotal = round2(subtotal);
-  const dType = $('#s-disc-type').value, dVal = num($('#s-disc').value);
-  let disc = dType === 'pct' ? round2(subtotal * dVal / 100) : round2(dVal);
   const issues = [];
-  let discOk = true;
-  if (dVal < 0) { issues.push({ type: 'error', title: 'Descuento inválido', text: 'El descuento no puede ser negativo.' }); disc = 0; discOk = false; }
-  if (dType === 'pct' && dVal > 100) { issues.push({ type: 'error', title: 'Descuento inválido', text: 'El porcentaje no puede pasar de 100 %.' }); discOk = false; }
-  if (disc > subtotal && subtotal > 0) { issues.push({ type: 'error', title: 'Descuento mayor al total', text: `El descuento (${money(disc)}) supera el subtotal (${money(subtotal)}).` }); discOk = false; }
-  if (disc > 0 && subtotal === 0) { issues.push({ type: 'error', title: 'Descuento sin productos', text: 'Primero agrega productos con precio.' }); discOk = false; }
-  const discPct = subtotal > 0 ? disc / subtotal * 100 : 0;
-  if (discOk && disc > 0 && discPct > S.settings.maxDiscount) issues.push({ type: 'warn', title: 'Descuento alto', text: `Estás dando ${discPct.toFixed(1)} % de descuento (el límite de aviso es ${S.settings.maxDiscount} %).` });
-  const total = round2(Math.max(0, subtotal - (discOk ? disc : 0)));
+  const total = subtotal;
   if (total >= S.settings.bigSale && total > 0) issues.push({ type: 'info', title: 'Venta grande', text: `Esta venta supera ${money(S.settings.bigSale)}.` });
-  return { subtotal, disc: discOk ? disc : 0, discOk, discPct, total, byCat, issues };
+  return { subtotal, disc: 0, discOk: true, total, byCat, issues };
 }
 
 
@@ -617,8 +607,6 @@ function updateTotals() {
   const c = calc(); lastCalc = c;
   cart.forEach(l => { const el = $(`.line[data-k="${l.k}"] .sub-val`); if (el) el.textContent = money(l.sub); });
   $('#sum-count').textContent = cart.filter(l => l.sub > 0).length;
-  $('#sum-sub').textContent = money(c.subtotal);
-  $('#sum-disc').textContent = '− ' + money(c.disc);
   $('#sum-total').textContent = money(c.total);
   $('#mt-total').textContent = money(c.total);
   $('#next-id').textContent = nextId();
@@ -639,8 +627,7 @@ function refreshSaleForm() {
 }
 function clearSale(silent) {
   cart = [newLine()]; showErrors = false;
-  $('#s-client').value = ''; $('#s-notes').value = ''; $('#s-disc').value = '';
-  $('#s-disc-type').value = 'bs';
+  $('#s-client').value = ''; $('#s-notes').value = '';
   renderLines();
   if (!silent) toast('info', 'Venta limpiada', 'Puedes empezar una nueva.');
 }
@@ -685,8 +672,6 @@ function bindSaleForm() {
     cart.push(l); renderLines();
     const el = $(`.line[data-k="${l.k}"]`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
-  $('#s-disc').addEventListener('input', updateTotals);
-  $('#s-disc-type').addEventListener('change', updateTotals);
   $('#btn-clear').addEventListener('click', async () => {
     if (!saleHasData()) return clearSale();
     if (await confirmBox({ title: 'Limpiar venta', message: 'Se borrarán todos los productos de esta venta que aún no guardaste.', okText: 'Sí, limpiar', danger: true })) clearSale();
@@ -707,7 +692,6 @@ function trySubmit() {
     const el = $(`.line[data-k="${bad.k}"] .invalid`); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); }
     return;
   }
-  if (!c.discOk) { toast('error', 'Corrige el descuento', 'Revisa el cuadro de descuento.'); beep('error'); return; }
   if (c.total <= 0) { toast('error', 'Total en cero', 'El total de la venta debe ser mayor a 0.'); beep('error'); return; }
 
   const warns = [];
@@ -717,9 +701,7 @@ function trySubmit() {
   const items = cart.map(l => `<div class="it"><span>${esc(l.name)}<small>${esc((catById(l.catId) || {}).name || '')} · ${qtyFmt(num(l.qty))} ${esc(l.unit)} × ${money(num(l.price))}</small></span><b>${money(l.sub)}</b></div>`).join('');
   const body = `<div class="item-list">${items}</div>
     <div class="kv">
-      <div><span>Subtotal</span><b>${money(c.subtotal)}</b></div>
-      ${c.disc > 0 ? `<div><span>Descuento</span><b>− ${money(c.disc)}</b></div>` : ''}
-      <div><span>Total a cobrar</span><b class="big">${money(c.total)}</b></div>
+      <div><span>Total de la venta</span><b class="big">${money(c.total)}</b></div>
     </div>
     ${warns.length ? `<div class="alert-list">${warns.join('')}</div>` : ''}`;
   modal({
@@ -774,8 +756,7 @@ function ticketHTML(s) {
     <div class="r"><span>Hora</span><span>${ftime(s.ts)}</span></div>
     ${s.client ? `<div class="r"><span>Cliente</span><span>${esc(s.client)}</span></div>` : ''}<hr>
     ${items}<hr>
-    <div class="r"><span>Subtotal</span><span>${s.subtotal.toFixed(2)}</span></div>
-    ${s.discount > 0 ? `<div class="r"><span>Descuento</span><span>-${s.discount.toFixed(2)}</span></div>` : ''}
+    ${s.discount > 0 ? `<div class="r"><span>Subtotal</span><span>${s.subtotal.toFixed(2)}</span></div><div class="r"><span>Descuento</span><span>-${s.discount.toFixed(2)}</span></div>` : ''}
     <div class="r"><b>TOTAL Bs</b><b>${s.total.toFixed(2)}</b></div><hr>
     <hr><div class="c">¡Gracias por su compra!</div></div>`;
 }
@@ -910,96 +891,7 @@ function checkSystemAlerts() {
     setTimeout(() => toast(a.type, a.title, a.text, 7000), i * 700);
   });
 }
-function alertAction(act) { if (act === 'backup') exportBackup(); if (act === 'caja') openClosing(); if (act === 'pin') setupPinFlow().then(() => { if (currentView === 'dashboard') renderDashboard(); }); }
-
-/* ==========================================================
-   DASHBOARD
-   ========================================================== */
-let DP = 'hoy';
-const DP_LABEL = { hoy: 'Hoy', '7d': '7 días', mes: 'Este mes', todo: 'Todo' };
-function inPeriod(s) {
-  const d = new Date(s.ts), now = new Date();
-  if (DP === 'hoy') return dkey(d) === dkey(now);
-  if (DP === '7d') { const x = new Date(now); x.setDate(x.getDate() - 6); x.setHours(0, 0, 0, 0); return d >= x; }
-  if (DP === 'mes') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  return true;
-}
-function renderDashboard() {
-  const el = $('#view-dashboard');
-  const ok = okSales(), now = new Date(), today = dkey(now);
-  const tS = ok.filter(s => dkey(s.ts) === today);
-  const wk = startOfWeek(now), wS = ok.filter(s => new Date(s.ts) >= wk);
-  const mS = ok.filter(s => { const d = new Date(s.ts); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
-  const tTot = sum(tS.map(s => s.total)), goal = S.settings.dailyGoal;
-  const gp = goal > 0 ? Math.min(100, tTot / goal * 100) : 0;
-  const alerts = computeAlerts();
-
-  // últimos 7 días
-  const days = [];
-  for (let i = 6; i >= 0; i--) { const d = new Date(now); d.setDate(d.getDate() - i); days.push({ k: dkey(d), lbl: DAYS[d.getDay()], t: 0 }); }
-  ok.forEach(s => { const x = days.find(d => d.k === dkey(s.ts)); if (x) x.t += s.total; });
-  const maxD = Math.max(1, ...days.map(d => d.t));
-
-  // periodo seleccionado
-  const P = ok.filter(inPeriod);
-  const catTot = {}, prod = {}, hours = Array(24).fill(0);
-  P.forEach(s => {
-    hours[new Date(s.ts).getHours()] += s.total;
-    s.items.forEach(i => {
-      catTot[i.catId] = catTot[i.catId] || { name: i.catName, emoji: i.catEmoji, t: 0 };
-      catTot[i.catId].t += i.sub;
-      const pk = i.catId + '|' + i.name.toLowerCase();
-      prod[pk] = prod[pk] || { name: i.name, t: 0, q: {} };
-      prod[pk].t += i.sub; prod[pk].q[i.unit] = (prod[pk].q[i.unit] || 0) + i.qty;
-    });
-  });
-  const cats = Object.keys(catTot).map(k => ({ id: k, ...catTot[k] })).sort((a, b) => b.t - a.t);
-  const catSum = sum(cats.map(c => c.t)) || 1;
-  let acc = 0;
-  const conic = cats.map(c => { const from = acc / catSum * 100; acc += c.t; return `${catColor(c.id)} ${from}% ${acc / catSum * 100}%`; }).join(',');
-  const tops = Object.values(prod).sort((a, b) => b.t - a.t).slice(0, 6);
-  const maxP = Math.max(1, ...tops.map(t => t.t));
-  const hrs = []; for (let h = 6; h <= 21; h++) hrs.push(h);
-  const maxH = Math.max(1, ...hrs.map(h => hours[h]));
-  const peak = hours.indexOf(Math.max(...hours));
-
-  el.innerHTML = `
-    <div class="page-head"><div><h1>Dashboard</h1><p class="muted">Resumen de ventas válidas (las anuladas no cuentan).</p></div></div>
-    ${alerts.length ? `<div class="alert-list">${alerts.map(a => alertHTML(a.type, a.title, esc(a.text), '', a.act ? `<button class="btn ghost sm" data-aa="${a.act}">${a.actLabel}</button>` : '')).join('')}</div>` : ''}
-    <div class="kpis">
-      <div class="kpi k1"><small>Vendido hoy</small><b>${money(tTot)}</b></div>
-      <div class="kpi k2"><small>Esta semana</small><b>${money(sum(wS.map(s => s.total)))}</b></div>
-      <div class="kpi k3"><small>Este mes</small><b>${money(sum(mS.map(s => s.total)))}</b></div>
-      <div class="kpi k4"><small>Ventas hoy</small><b>${tS.length}</b></div>
-      <div class="kpi k5"><small>Ticket promedio hoy</small><b>${money(tS.length ? tTot / tS.length : 0)}</b></div>
-      <div class="kpi k6"><small>Anuladas hoy</small><b>${S.sales.filter(s => s.status === 'void' && dkey(s.ts) === today).length}</b></div>
-    </div>
-    <div class="card"><h2>Meta del día</h2>
-      <div class="progress ${gp >= 100 ? 'done' : ''}"><i style="width:${gp}%"></i></div>
-      <p class="muted">${goal > 0 ? `${money(tTot)} de ${money(goal)} (${Math.round(gp)} %)` : 'Define una meta en Ajustes.'}</p></div>
-    <div class="card"><h2>Ventas de los últimos 7 días</h2>
-      <div class="bars">${days.map(d => `<div class="bar-col ${d.k === today ? 'today' : ''}"><span class="bar-val">${d.t ? Math.round(d.t) : ''}</span><div class="bar" style="height:${d.t / maxD * 100 * 0.8}%"></div><span class="bar-lbl">${d.lbl}</span></div>`).join('')}</div></div>
-
-    <div class="seg" role="group" aria-label="Periodo">${Object.keys(DP_LABEL).map(k => `<button data-dp="${k}" class="${k === DP ? 'on' : ''}">${DP_LABEL[k]}</button>`).join('')}</div>
-    ${P.length ? `
-    <div class="dash-grid">
-      <div class="card"><h2>Ventas por categoría</h2>
-        <div class="donut-wrap"><div class="donut" style="background:conic-gradient(${conic})"></div>
-        <div class="legend">${cats.map(c => `<div><span><i style="background:${catColor(c.id)}"></i>${esc(c.emoji + ' ' + c.name)}</span><b>${money(c.t)} <small class="muted">${Math.round(c.t / catSum * 100)}%</small></b></div>`).join('')}</div></div></div>
-      <div class="card"><h2>Productos más vendidos</h2>
-        ${tops.map(t => `<div class="hbar"><div class="hbar-top"><span>${esc(t.name)} <small class="muted">${Object.keys(t.q).map(u => qtyFmt(t.q[u]) + ' ' + u).join(' + ')}</small></span><b>${money(t.t)}</b></div><div class="hbar-track"><i style="width:${t.t / maxP * 100}%"></i></div></div>`).join('')}</div>
-      <div class="card"><h2>Ventas por hora</h2>
-        <div class="bars hours">${hrs.map(h => `<div class="bar-col"><div class="bar" style="height:${hours[h] / maxH * 85}%" title="${h}:00 · ${money(hours[h])}"></div><span class="bar-lbl">${h}</span></div>`).join('')}</div>
-        <p class="muted" style="margin-top:8px">${hours[peak] > 0 ? `Hora pico: <b>${peak}:00 a ${peak + 1}:00</b>` : ''}</p></div>
-      <div class="card"><h2>Resumen del periodo</h2>
-        <div class="kv"><div><span>Ventas</span><b>${P.length}</b></div><div><span>Total vendido</span><b>${money(sum(P.map(s => s.total)))}</b></div><div><span>Ticket promedio</span><b>${money(sum(P.map(s => s.total)) / P.length)}</b></div><div><span>Descuentos dados</span><b>${money(sum(P.map(s => s.discount)))}</b></div></div></div>
-    </div>` : `<div class="empty"><span class="e-ico">📊</span>No hay ventas en este periodo.${S.sales.length === 0 ? '<br>Puedes cargar datos de ejemplo en Ajustes para ver cómo se ve.' : ''}</div>`}
-    <div class="card" style="margin-top:14px"><h2>Últimas ventas</h2>
-      ${S.sales.length ? S.sales.slice(-6).reverse().map(s => `<button class="sale-card ${s.status === 'void' ? 'void' : ''}" data-id="${s.id}"><span class="sc-ico">🧾</span><span><span class="sc-id">${s.id}</span><span class="sc-sub" style="display:block">${fdate(s.ts)} · ${ftime(s.ts)}</span></span><span class="sc-total">${money(s.total)}</span></button>`).join('') : '<p class="muted">Sin ventas todavía.</p>'}</div>`;
-  $$('[data-dp]', el).forEach(b => b.addEventListener('click', () => { DP = b.dataset.dp; renderDashboard(); }));
-  $$('[data-aa]', el).forEach(b => b.addEventListener('click', () => alertAction(b.dataset.aa)));
-  $$('.sale-card', el).forEach(b => b.addEventListener('click', () => showSaleDetail(b.dataset.id)));
-}
+function alertAction(act) { if (act === 'backup') exportBackup(); if (act === 'caja') openClosing(); if (act === 'pin') setupPinFlow(); }
 
 /* ==========================================================
    REPORTES Y EXPORTACIÓN
@@ -1071,7 +963,6 @@ function buildReport() {
   const live = used.filter(s => s.status !== 'void');
   const liveLines = lines.filter(l => l.s.status !== 'void');
   const total = lineFilter ? round2(sum(liveLines.map(l => l.it.sub))) : round2(sum(live.map(s => s.total)));
-  const discount = lineFilter ? 0 : round2(sum(live.map(s => s.discount)));
   const count = live.length;
   const byCat = {}, byDay = {};
   liveLines.forEach(({ s, it }) => {
@@ -1086,7 +977,7 @@ function buildReport() {
   const periodText = (f.from ? fdateKey(f.from) : 'inicio') + ' al ' + (f.to ? fdateKey(f.to) : 'hoy');
   const filtersText = [f.cat ? 'Categoría: ' + (catById(f.cat) || {}).name : '', q ? 'Producto: ' + f.q : '', 'Estado: ' + ({ ok: 'solo válidas', all: 'con anuladas', void: 'solo anuladas' })[f.status]].filter(Boolean).join(' · ');
   return {
-    count, total, discount, avg: count ? round2(total / count) : 0, lineFilter,
+    count, total, avg: count ? round2(total / count) : 0, lineFilter,
     voidCount: voids.length, voidTotal: round2(sum(voids.map(s => s.total))),
     items: liveLines.length,
     byCat: Object.values(byCat).sort((a, b) => b.total - a.total),
@@ -1107,12 +998,11 @@ function renderReportResults() {
       <div class="kpi k1"><small>Total vendido</small><b>${money(R.total)}</b></div>
       <div class="kpi k2"><small>Ventas</small><b>${R.count}</b></div>
       <div class="kpi k3"><small>Ticket promedio</small><b>${money(R.avg)}</b></div>
-      <div class="kpi k4"><small>Descuentos</small><b>${money(R.discount)}</b></div>
       <div class="kpi k5"><small>Productos vendidos</small><b>${R.items}</b></div>
       <div class="kpi k6"><small>Anuladas</small><b>${R.voidCount}</b></div>
     </div>
     <p class="muted" style="margin-bottom:10px">Periodo: <b>${R.periodText}</b> · ${esc(R.filtersText)}</p>
-    ${R.lineFilter ? alertHTML('info', 'Filtro por categoría o producto', 'El total suma solo los productos filtrados, sin descuentos.') + '<br>' : ''}
+    ${R.lineFilter ? alertHTML('info', 'Filtro por categoría o producto', 'El total suma solo los productos filtrados.') + '<br>' : ''}
     <div class="dash-grid">
       <div class="card"><h2>Por categoría</h2><div class="table-wrap"><table><thead><tr><th>Categoría</th><th class="num">Líneas</th><th class="num">Total</th></tr></thead><tbody>
         ${R.byCat.map(c => `<tr><td>${esc(c.name)}</td><td class="num">${c.lines}</td><td class="num">${c.total.toFixed(2)}</td></tr>`).join('')}</tbody></table></div>
@@ -1146,7 +1036,7 @@ function doExport(kind) {
   }
 }
 function summaryRows(R) {
-  return [['Ventas válidas', R.count], ['Total vendido (Bs)', R.total], ['Ticket promedio (Bs)', R.avg], ['Descuentos (Bs)', R.discount], ['Productos vendidos (líneas)', R.items], ['Ventas anuladas', R.voidCount], ['Monto anulado (Bs)', R.voidTotal]];
+  return [['Ventas válidas', R.count], ['Total vendido (Bs)', R.total], ['Ticket promedio (Bs)', R.avg], ['Productos vendidos (líneas)', R.items], ['Ventas anuladas', R.voidCount], ['Monto anulado (Bs)', R.voidTotal]];
 }
 function exportExcel(R) {
   if (!window.XLSX) {
@@ -1306,7 +1196,7 @@ function renderCatalogo() {
   const el = $('#view-catalogo');
   const cnt = id => S.products.filter(p => p.catId === id).length;
   el.innerHTML = `
-    <div class="page-head"><div><h1>Catálogo</h1><p class="muted">Productos fijos por categoría. El precio se escribe a mano en cada venta.</p></div></div>
+    <div class="page-head"><div><h1>Catálogo</h1><p class="muted">Productos fijos por categoría. El precio se escribe a mano en cada venta.</p></div><button class="btn ghost" id="go-ajustes">⚙ Ajustes del encargado</button></div>
     <div class="grid-2">
       <div class="card"><h2>Categorías</h2>
         ${S.categories.map(c => `<div class="list-row" style="border-left:6px solid ${catColor(c.id)}"><span class="emoji">${esc(c.emoji)}</span><div class="lr-main"><b>${esc(c.name)}</b><span class="muted tiny">${cnt(c.id)} productos</span></div><button class="icon-btn" data-ec="${c.id}" aria-label="Editar ${esc(c.name)}">✏️</button><button class="icon-btn danger" data-dc="${c.id}" aria-label="Eliminar ${esc(c.name)}">🗑️</button></div>`).join('') || '<div class="empty">Aún no hay categorías.</div>'}
@@ -1316,6 +1206,7 @@ function renderCatalogo() {
         ${S.products.length ? '' : '<div class="empty">Aún no hay productos. Agrégalos aquí: son los que aparecerán al vender.</div>'}
         <button class="btn primary" id="add-prod" style="width:100%;margin-top:6px">＋ Nuevo producto</button></div>
     </div>`;
+  $('#go-ajustes').addEventListener('click', () => show('ajustes'));
   $('#add-cat').addEventListener('click', () => catForm());
   $('#add-prod').addEventListener('click', () => prodForm());
   $$('[data-ec]', el).forEach(b => b.addEventListener('click', () => catForm(b.dataset.ec)));
@@ -1379,14 +1270,13 @@ function renderAjustes() {
   const el = $('#view-ajustes'), st = S.settings;
   const kb = Math.round((localStorage.getItem(KEY) || '').length * 2 / 1024);
   el.innerHTML = `
-    <div class="page-head"><div><h1>Ajustes</h1><p class="muted">Estos valores controlan las alertas. Puedes cambiarlos cuando quieras.</p></div></div>
+    <div class="page-head"><div><h1>Ajustes del encargado</h1><p class="muted">Clave, avisos, respaldos y publicación del catálogo.</p></div><button class="btn ghost" id="go-catalogo">← Catálogo</button></div>
     <div class="grid-2">
       <div class="card"><h2>Negocio y alertas</h2>
         <label>Nombre del negocio<input id="st-name" value="${esc(st.business)}" maxlength="40"></label>
         <div class="row2" style="margin-top:10px">
           <label>Venta grande desde (Bs)<input id="st-big" type="number" inputmode="decimal" min="0" value="${st.bigSale}"></label>
           <label>Meta diaria (Bs)<input id="st-goal" type="number" inputmode="decimal" min="0" value="${st.dailyGoal}"></label>
-          <label>Avisar descuento mayor a (%)<input id="st-disc" type="number" inputmode="decimal" min="0" max="100" value="${st.maxDiscount}"></label>
         </div>
         <div class="switch-row"><span>Sonido y vibración en alertas</span><input id="st-sound" type="checkbox" ${st.sound ? 'checked' : ''}></div>
         <button class="btn primary" id="st-save" style="width:100%">Guardar ajustes</button></div>
@@ -1394,7 +1284,7 @@ function renderAjustes() {
         <p class="muted" style="margin-bottom:10px">Clave del encargado: <b>${st.pin ? 'creada ✔' : 'sin crear'}</b>. Siempre se pide para entrar a Catálogo y Ajustes. Se vuelve a pedir tras 5 minutos sin usar o al volver a Vender.</p>
         <div class="switch-row"><span>Pedir clave para anular ventas</span><input id="sec-void" type="checkbox" ${st.lockVoid !== false ? 'checked' : ''}></div>
         <p class="muted tiny" style="margin:8px 0 2px">También pedir clave para entrar a:</p>
-        ${['historial', 'dashboard', 'reportes'].map(v => `<div class="switch-row"><span>${VIEW_NAMES[v]}</span><input type="checkbox" data-lv="${v}" ${(st.lockViews || {})[v] ? 'checked' : ''}></div>`).join('')}
+        ${['historial', 'reportes'].map(v => `<div class="switch-row"><span>${VIEW_NAMES[v]}</span><input type="checkbox" data-lv="${v}" ${(st.lockViews || {})[v] ? 'checked' : ''}></div>`).join('')}
         <div class="btn-row" style="margin-top:8px"><button class="btn primary" id="sec-pin">🔑 ${st.pin ? 'Cambiar clave' : 'Crear clave'}</button><button class="btn ghost" id="sec-lock">🔒 Bloquear ahora</button></div></div>
       <div class="card"><h2>Publicar para las impulsadoras</h2>
         <p class="muted" style="margin-bottom:10px">Los celulares toman de un archivo <b>config.js</b> la clave del encargado, las categorías y los productos. Cuando cambies algo de eso aquí, descarga el archivo y súbelo a GitHub reemplazando el anterior. <b>Estado:</b> ${st.pin ? 'listo para publicar' : 'primero crea la clave'}.</p>
@@ -1403,17 +1293,18 @@ function renderAjustes() {
         <p class="muted" style="margin-bottom:10px">Tus datos viven en este navegador (${kb} KB usados). Haz respaldos seguido y guarda el archivo en un lugar seguro.${st.lastBackup ? `<br>Último respaldo: <b>${fdate(st.lastBackup)} ${ftime(st.lastBackup)}</b>` : '<br><b>Aún no hiciste ningún respaldo.</b>'}</p>
         <div class="btn-row"><button class="btn primary" id="bk-export">💾 Crear respaldo</button><button class="btn ghost" id="bk-import">📂 Importar respaldo</button></div></div>
       <div class="card"><h2>Datos de prueba</h2>
-        <p class="muted" style="margin-bottom:10px">Carga ventas de ejemplo para ver cómo luce el dashboard y los reportes. Reemplaza lo que tengas ahora.</p>
+        <p class="muted" style="margin-bottom:10px">Carga ventas de ejemplo para ver cómo lucen el historial y los reportes. Reemplaza lo que tengas ahora.</p>
         <button class="btn ghost" id="bk-sample">🧪 Cargar datos de ejemplo</button></div>
       <div class="card"><h2>Borrar todo</h2>
         <p class="muted" style="margin-bottom:10px">Elimina ventas, productos y ajustes de este navegador. Haz un respaldo antes.</p>
         <button class="btn danger" id="bk-reset">🗑️ Borrar todos los datos</button></div>
     </div>`;
+  $('#go-catalogo').addEventListener('click', () => show('catalogo'));
   $('#st-save').addEventListener('click', () => {
-    const name = $('#st-name').value.trim(), big = num($('#st-big').value), goal = num($('#st-goal').value), disc = num($('#st-disc').value);
+    const name = $('#st-name').value.trim(), big = num($('#st-big').value), goal = num($('#st-goal').value);
     if (!name) return toast('error', 'Falta el nombre', 'Escribe el nombre del negocio.');
-    if (big < 0 || goal < 0 || disc < 0 || disc > 100) return toast('error', 'Valores inválidos', 'Los montos no pueden ser negativos y el descuento va de 0 a 100.');
-    Object.assign(S.settings, { business: name, bigSale: big, dailyGoal: goal, maxDiscount: disc, sound: $('#st-sound').checked });
+    if (big < 0 || goal < 0) return toast('error', 'Valores inválidos', 'Los montos no pueden ser negativos.');
+    Object.assign(S.settings, { business: name, bigSale: big, dailyGoal: goal, sound: $('#st-sound').checked });
     if (save()) { applyBrand(); toast('success', 'Ajustes guardados'); }
   });
   $('#bk-export').addEventListener('click', exportBackup);
@@ -1421,7 +1312,7 @@ function renderAjustes() {
   $('#bk-sample').addEventListener('click', loadSample);
   $('#bk-reset').addEventListener('click', resetAll);
   $('#sec-void').addEventListener('change', e => { S.settings.lockVoid = e.target.checked; if (save()) toast('success', 'Guardado', e.target.checked ? 'Anular ventas pedirá clave.' : 'Anular ventas ya no pedirá clave.'); });
-  $$('[data-lv]', el).forEach(c => c.addEventListener('change', () => { S.settings.lockViews = Object.assign({ historial: false, dashboard: false, reportes: false }, S.settings.lockViews, { [c.dataset.lv]: c.checked }); if (save()) { updateLockUI(); toast('success', 'Guardado', `${VIEW_NAMES[c.dataset.lv]} ${c.checked ? 'pedirá clave' : 'ya no pedirá clave'}.`); } }));
+  $$('[data-lv]', el).forEach(c => c.addEventListener('change', () => { S.settings.lockViews = Object.assign({ historial: false, reportes: false }, S.settings.lockViews, { [c.dataset.lv]: c.checked }); if (save()) { updateLockUI(); toast('success', 'Guardado', `${VIEW_NAMES[c.dataset.lv]} ${c.checked ? 'pedirá clave' : 'ya no pedirá clave'}.`); } }));
   $('#sec-pin').addEventListener('click', () => { if (S.settings.pin) changePinFlow(); else setupPinFlow().then(() => renderAjustes()); });
   $('#sec-lock').addEventListener('click', lockNow);
   $('#cfg-export').addEventListener('click', exportConfig);
@@ -1459,7 +1350,7 @@ async function loadSample() {
     Res: [['Lomo', 'kg', 75], ['Costilla de res', 'kg', 55], ['Carne molida', 'kg', 60]],
     Cerdo: [['Chuleta', 'kg', 48], ['Costilla de cerdo', 'kg', 42]],
     Pollo: [['Pollo entero', 'kg', 18], ['Pechuga', 'kg', 28], ['Alitas', 'kg', 24]],
-    Embutidos: [['Chorizo', 'kg', 45], ['Salchicha', 'paquete', 18]],
+    Embutidos: [['Chorizo', 'kg', 45], ['Salchicha', 'unidad', 18]],
     Otros: [['Carbón', 'unidad', 25], ['Chimichurri', 'unidad', 12]]
   };
   const pool = [];
@@ -1476,13 +1367,13 @@ async function loadSample() {
         const price = round2(p.price * rnd(0.95, 1.08));
         return { catId: p.c.id, catName: p.c.name, catEmoji: p.c.emoji, name: p.name, qty, unit: p.unit, price, sub: round2(qty * price) };
       });
-      const subtotal = round2(sum(items.map(i => i.sub))), discount = Math.random() < 0.12 ? round2(subtotal * 0.05) : 0, total = round2(subtotal - discount);
+      const subtotal = round2(sum(items.map(i => i.sub))), discount = 0, total = subtotal;
       S.counter++;
       S.sales.push({ id: 'V-' + pad(S.counter, 4), ts: dt.toISOString(), items, subtotal, discount, total, client: '', notes: '', status: Math.random() < 0.03 ? 'void' : 'ok', voidReason: 'Error de precio', voidAt: dt.toISOString() });
     }
   }
   S.sales.sort((a, b) => a.ts.localeCompare(b.ts)).forEach((s, i) => { s.id = 'V-' + pad(i + 1, 4); }); S.counter = S.sales.length;
-  if (save()) { cart = []; toast('success', 'Datos de ejemplo cargados', `${S.sales.length} ventas de los últimos 14 días.`); show('dashboard'); }
+  if (save()) { cart = []; toast('success', 'Datos de ejemplo cargados', `${S.sales.length} ventas de los últimos 14 días.`); show('historial'); }
 }
 
 /* ==========================================================
@@ -1504,7 +1395,9 @@ function tickClock() {
   const sc = $('#sale-clock'); if (sc) sc.textContent = fdate(iso) + ' ' + ftime(iso);
 }
 function boot() {
-  applyConfig(); applyTheme(); applyBrand(); bindSaleForm(); initLock();
+  applyConfig();
+  { let fx = false; S.products.forEach(p => { if (!UNITS.includes(p.unit)) { p.unit = 'unidad'; fx = true; } }); if (fx) save(); }
+  applyTheme(); applyBrand(); bindSaleForm(); initLock();
   $$('#nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.view)));
   $('#btn-theme').addEventListener('click', () => { S.settings.theme = S.settings.theme === 'dark' ? 'light' : 'dark'; save(); applyTheme(); });
   $('#file-import').addEventListener('change', e => { if (e.target.files[0]) importBackup(e.target.files[0]); e.target.value = ''; });
